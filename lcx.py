@@ -18,6 +18,60 @@ def getSalt():
 def validate(hashstr,password,salt):
     return hasattr==hash(password+salt)
 
+def ltv_encode(values):
+    type=values[1]
+    code=bytearray()
+    code.append(values[0]>>8)
+    code.append(values[0]&0x00ff)
+    code.append(type)
+    if type==0:
+        code.append(values[2])
+        return str(code,encoding='utf-8')+values[3]
+    elif type==1:
+        code.append(values[2])
+        code+=bytearray(values[3],encoding='utf8')
+        code.append(values[4])
+        return str(code,encoding='utf-8')+values[5]
+    elif type==2:
+        code.append(values[2])
+        return str(code,encoding='utf-8')
+    elif type==3:
+        code.append(values[2]>>8)
+        code.append(values[2]&0x00ff)
+        code.append(values[3]>>8)
+        code.append(values[3]&0x00ff)
+        return str(code,encoding='utf-8')
+    elif type==4:
+        code.append(values[2]>>8)
+        code.append(values[2]&0x00ff)
+        code.append(values[3])
+        code.append(values[4]>>8)
+        code.append(values[4]&0x00ff)
+        return str(code,encoding='utf-8')
+    elif type==5:
+        code.append(values[2]>>8)
+        code.append(values[2]&0x00ff)
+        code.append(values[3]>>8)
+        code.append(values[3]&0x00ff)
+        return str(code,encoding='utf-8')
+    elif type==6:
+        code.append(values[2]>>8)
+        code.append(values[2]&0x00ff)
+        code.append(values[3])
+        code.append(values[4]>>8)
+        code.append(values[4]&0x00ff)
+        return str(code,encoding='utf-8')
+    elif type==7:
+        code.append(values[2]>>8)
+        code.append(values[2]&0x00ff)
+        code.append(values[3]>>8)
+        code.append(values[3]&0x00ff)
+        return str(code,encoding='utf-8')+values[4]
+    elif type==8:
+        code.append(values[2]>>8)
+        code.append(values[2]&0x00ff)
+        return str(code,encoding='utf-8')
+
 def listen(opts,args):
     for opt,arg in opts:
         if opt == '-p':
@@ -26,6 +80,7 @@ def listen(opts,args):
             users=arg.split(',')
 
     asyncio.get_event_loop()
+
 
 #与remote listen建立隧道连接
 async def build_tunnel(port,user,remoteAdd,loop):
