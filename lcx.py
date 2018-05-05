@@ -1,6 +1,34 @@
 import asyncio
 import sys,getopt
 import random
+import struct
+
+#协议编码格式
+fmt_chap_salt='BBs'
+fmt_chap_hash='BBsBs'
+fmt_chap_result='BB'
+fmt_bind_request='BHH'
+fmt_bind_respone='BHBH'
+fmt_connect_request='BHH'
+fmt_connect_respone='BHBH'
+fmt_data='BHHs'
+fmt_dsconnect='BH'
+
+class listen_args:
+    tunnel_port=0
+    users=list()
+
+class slave_args:
+    tunnel_port=0
+    tunnel_add=''
+    usr_name=''
+    usr_pw=''
+    remote_port=0
+    local_port=0
+    local_add=''
+
+l_args=listen_args()
+s_args=slave_args()
 
 def hashSalt(password,salt):
     return hash(password+salt)
@@ -10,7 +38,7 @@ def getSalt():
     salt=''
     charSet='AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789'
     charLen=len(charSet)-1
-    for i in range(6):
+    for i in range(random.randint(6,12)):
         salt+=charSet[random.randint(0,charLen)]
     return salt
 
@@ -18,72 +46,27 @@ def getSalt():
 def validate(hashstr,password,salt):
     return hasattr==hash(password+salt)
 
-def ltv_encode(values):
-    type=values[1]
-    code=bytearray()
-    code.append(values[0]>>8)
-    code.append(values[0]&0x00ff)
-    code.append(type)
-    if type==0:
-        code.append(values[2])
-        return str(code,encoding='utf-8')+values[3]
-    elif type==1:
-        code.append(values[2])
-        code+=bytearray(values[3],encoding='utf8')
-        code.append(values[4])
-        return str(code,encoding='utf-8')+values[5]
-    elif type==2:
-        code.append(values[2])
-        return str(code,encoding='utf-8')
-    elif type==3:
-        code.append(values[2]>>8)
-        code.append(values[2]&0x00ff)
-        code.append(values[3]>>8)
-        code.append(values[3]&0x00ff)
-        return str(code,encoding='utf-8')
-    elif type==4:
-        code.append(values[2]>>8)
-        code.append(values[2]&0x00ff)
-        code.append(values[3])
-        code.append(values[4]>>8)
-        code.append(values[4]&0x00ff)
-        return str(code,encoding='utf-8')
-    elif type==5:
-        code.append(values[2]>>8)
-        code.append(values[2]&0x00ff)
-        code.append(values[3]>>8)
-        code.append(values[3]&0x00ff)
-        return str(code,encoding='utf-8')
-    elif type==6:
-        code.append(values[2]>>8)
-        code.append(values[2]&0x00ff)
-        code.append(values[3])
-        code.append(values[4]>>8)
-        code.append(values[4]&0x00ff)
-        return str(code,encoding='utf-8')
-    elif type==7:
-        code.append(values[2]>>8)
-        code.append(values[2]&0x00ff)
-        code.append(values[3]>>8)
-        code.append(values[3]&0x00ff)
-        return str(code,encoding='utf-8')+values[4]
-    elif type==8:
-        code.append(values[2]>>8)
-        code.append(values[2]&0x00ff)
-        return str(code,encoding='utf-8')
-
+#remote listen
 def listen(opts,args):
     for opt,arg in opts:
         if opt == '-p':
-            port=arg
+            l_args.tunnel_port=int(arg)
         elif opt == '-u':
-            users=arg.split(',')
+            l_args.users=arg.split(',')
 
-    asyncio.get_event_loop()
+    loop=asyncio.get_event_loop()
+    coro=asyncio.start_server(handle_slave,'127.0.0.1',l_args.tunnel_port,loop=loop)
+    server=loop.run_until_complete(coro)
+
+
+async def handle_slave(reader,writer):
+    salt=getSalt()
+    msg=struct.pack('H'+fmt_chap_salt,2,0,len(salt),salt)
+    writer.write(msg)
 
 
 #与remote listen建立隧道连接
-async def build_tunnel(port,user,remoteAdd,loop):
+async def build_tunnel(port,user,remoteAdd,reader,writer,loop):
     ip,remotePort=remoteAdd.split(':')
     name,password=user.split(':')
 
