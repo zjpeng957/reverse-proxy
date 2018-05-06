@@ -98,7 +98,7 @@ def find_pwd(name):
 
 async def chap(reader,writer):
     salt=getSalt()
-    msg=struct.pack(prefix+fmt_chap_salt,2,com_type.chap_salt,len(salt),salt)
+    msg=struct.pack(fmt_chap_salt,4+len(salt),com_type.chap_salt,len(salt),salt)
     writer.write(msg)
     await writer.drain()
     length=struct.unpack('H',await reader.readexactly(2))
@@ -129,9 +129,9 @@ async def chap(reader,writer):
         return False
 
 async def handle_slave(reader,writer):
-    while chap(reader,writer)==False:
+    while (await chap(reader,writer))==False:
         pass
-
+    print("chap succeed")
     requestID_count=0
     while True:
         for port,v in connected:
@@ -230,6 +230,7 @@ def slave(opts,args):
 
     loop=asyncio.get_event_loop()
     loop.run_until_complete(handle_listen())
+    print("connecting to %d"%s_args.tunnel_port)
     
 async def handle_listen():
     reader,writer=await asyncio.open_connection(s_args.tunnel_add,s_args.tunnel_port,loop=loop)
@@ -254,7 +255,7 @@ async def handle_listen():
     result=struct.unpack('B',await reader.readexactly(1))
     if(result==0):
         sys.exit(2)
-
+    print("chap succeed")
     #msg=struct.pack(fmt_bind_request,7,com_type.bind_request,1,)
     while True:
         for port,v in connected:            
