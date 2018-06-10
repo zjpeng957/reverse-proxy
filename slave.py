@@ -176,25 +176,24 @@ async def handle_listen():
         length, = struct.unpack('H', await reader.readexactly(2))
         command = struct.unpack('B', await reader.readexactly(1))
         if command[0] != com_type.chap_result.value:
-            reader.readexactly(length-1)
+            reader.readexactly(length-3)
             continue
         result, = struct.unpack('B', await reader.readexactly(1))
-        if (result == 0):
+        if result == 0:
             continue
         print("chap succeed")
         break
 
     # 隧道建立完成,绑定端口
     while True:
-        msg = struct.pack('HBBHH', 8, com_type.bind_request.value, 0xff, 2, s_args.bind_port)
-        requestID_count = requestID_count + 1;
+        msg = struct.pack('=HBHH', 7, com_type.bind_request.value, 2, s_args.bind_port)
+        requestID_count = requestID_count + 1
         writer.write(msg)
         #接收绑定端口回复
         length, = struct.unpack('H', await reader.readexactly(2))
-        command = struct.unpack('H', await reader.readexactly(2))
+        command = struct.unpack('B', await reader.readexactly(1))
         if command[0] == com_type.bind_response.value:
-            data=await reader.readexactly(6)
-            requestID,result,p = struct.unpack('HHH', data)
+            requestID,result,p = struct.unpack('=HBH', await reader.readexactly(5))
             if result == 1:
                 print("bind %d succeed\n" % s_args.bind_port)
                 break
@@ -203,25 +202,17 @@ async def handle_listen():
                 continue
         else:
             print("bind %d fail"%s_args.bind_port)
-            reader.readexactly(length-2)
+            reader.readexactly(length-3)
 
     while True:
         length = struct.unpack('H', await reader.readexactly(2))
-        command = struct.unpack('H', await reader.readexactly(2))
-        if command[0] == com_type.bind_response.value:
-            requestID = struct.unpack('H', await reader.readexactly(2))
-            result, = struct.unpack('B', await reader.readexactly(1))
-            if result == 1:
-                print("bind %d succeed\n" % requestID)
-            else:
-                print("bind %d succeed\n" % requestID)
-            await reader.readexactly(3)
-        elif command[0] == com_type.connect_request.value:
+        command = struct.unpack('B', await reader.readexactly(1))
+        if command[0] == com_type.connect_request.value:
             requestID, = struct.unpack('H', await reader.readexactly(2))
             listen_port, = struct.unpack('H', await reader.readexactly(2))
             client = asyncio.wait_for(
                     asyncio.ensure_future(handle_server(requestID,connectID_count, s_args.local_host_addr,s_args.local_host_port)), None)
-            connectID_count+=1
+            connectID_count += 1
 
         elif command[0] == com_type.data.value:
             connectID, = struct.unpack('H', await reader.readexactly(2))
@@ -239,14 +230,13 @@ async def handle_listen():
                 server_writer[connectID].close()
 
 
-
 async def handle_server(rid,id, addr,request_port,):
     try:
         reader, writer = await asyncio.open_connection(addr, int(request_port), loop=loop)
-        msg = struct.pack('=HHHBH', 9, com_type.connect_response.value, rid, 1, id)
+        msg = struct.pack('=HBHBH', 8, com_type.connect_response.value, rid, 1, id)
         listen_writer.write(msg)
     except asyncio.TimeoutError:
-        msg = struct.pack('=HHHBH', 9, com_type.connect_response.value, rid, 0, id)
+        msg = struct.pack('=HBHBH', 8, com_type.connect_response.value, rid, 0, id)
         listen_writer.write(msg)
     global server_writer
     server_writer[id]=writer
@@ -256,15 +246,14 @@ async def handle_server(rid,id, addr,request_port,):
         while True:
              data = await asyncio.wait_for(reader.read(100), timeout=5, loop=loop)
              print("reading %d..."%rid)
-             msg=struct.pack("=HHHH"+str(len(data))+"s",7+len(data),com_type.data.value,id,len(data),data)
+             msg=struct.pack("=HBHH"+str(len(data))+"s",7+len(data),com_type.data.value,id,len(data),data)
              listen_writer.write(msg)
-            #data = await asyncio.wait_for(reader.read(100),5,loop=loop)
     except asyncio.TimeoutError:
         print("%d timeout"%id)
 
         if syn_que[id].empty():
             await syn_que[id].put(id)
-            msg=struct.pack("=HHH",5,com_type.disconnect.value,id)
+            msg=struct.pack("=HBH",5,com_type.disconnect.value,id)
             listen_writer.write(msg)
             await syn_que[id].join()
         else:
