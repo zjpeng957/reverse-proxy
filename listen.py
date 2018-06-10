@@ -110,14 +110,14 @@ def find_pwd(name):
         usr_name, usr_pw = user.split(':')
         if usr_name == name:
             return usr_pw
-
     return None
 
 
+#chap认证
 async def chap(reader, writer):
     salt = getSalt()
 
-    msg = struct.pack('HBB' + str(len(salt)) + 's', 4 + len(salt), com_type.chap_salt.value, len(salt),
+    msg = struct.pack('=HBB' + str(len(salt)) + 's', 4 + len(salt), com_type.chap_salt.value, len(salt),
                       bytes(salt, encoding='utf-8'))
     writer.write(msg)
     await writer.drain()
@@ -134,7 +134,6 @@ async def chap(reader, writer):
         return False
 
     name_len = struct.unpack('B', await reader.readexactly(1))
-    # name=struct.unpack('s',)
     data = await reader.readexactly(name_len[0])
     name = bytes.decode(data)
     hash_len = struct.unpack('B', await reader.readexactly(1))
@@ -156,27 +155,30 @@ async def handle_slave(reader, writer):
     global slave_writer,requested,connected,requested_lock,syn_que,con_to_req
     slave_writer=writer
     result = await chap(reader, writer)
-    if result == False:
-        exit(2)
+    while result == False:
+        result = await chap(reader, writer)
     print("chap succeed")
 
-    #接收要绑定的端口
-    length = struct.unpack('H', await reader.readexactly(2))
-    command, t = struct.unpack('BB', await reader.readexactly(2))
+    while True:
+        #接收要绑定的端口
+        length = struct.unpack('H', await reader.readexactly(2))
+        command, t = struct.unpack('BB', await reader.readexactly(2))
 
-    data = await reader.readexactly(4)
-    req_id, bind_port = struct.unpack('HH',data)
-    if bind_port == 0:
-        bind_port = random.randint(1000, 10000)
-    try:
-        coro = asyncio.start_server(handle_client, '127.0.0.1', bind_port, loop=loop)
-        server = asyncio.wait_for(asyncio.ensure_future(coro), None)
-        msg = struct.pack('HHHHH', 10, com_type.bind_response.value, req_id, 1, bind_port)
-        print("bind %d succeed\n" % bind_port)
-    except asyncio.TimeoutError:
-        msg = struct.pack(fmt_bind_respone, 8, com_type.bind_response.value, req_id, 0, bind_port)
-        print("bind %d fail\n" % bind_port)
-    writer.write(msg)
+        data = await reader.readexactly(4)
+        req_id, bind_port = struct.unpack('HH',data)
+        if bind_port == 0:
+            bind_port = random.randint(1000, 10000)
+        try:
+            coro = asyncio.start_server(handle_client, '127.0.0.1', bind_port, loop=loop)
+            server = asyncio.wait_for(asyncio.ensure_future(coro), None)
+            msg = struct.pack('HHHHH', 10, com_type.bind_response.value, req_id, 1, bind_port)
+            print("bind %d succeed\n" % bind_port)
+            writer.write(msg)
+            break
+        except asyncio.TimeoutError:
+            msg = struct.pack(fmt_bind_respone, 8, com_type.bind_response.value, req_id, 0, bind_port)
+            print("bind %d fail\n" % bind_port)
+            writer.write(msg)
 
     requestID_count = 0
     requestID_count = 0
@@ -194,14 +196,12 @@ async def handle_slave(reader, writer):
             print("hello %d" % requestID)
             if result == 1:
                 connectID, = struct.unpack('H', await reader.readexactly(2))
-            #    port = req_to_port[requestID]
                 con_to_req[connectID]=requestID
                 await requested_lock
                 try:
                     connected[connectID] = True
                     requested[requestID]=connectID
                     await syn_que[requestID].put(connectID)
-                    #syn_events[requestID].set()
                 finally:
                     requested_lock.release()
 
@@ -216,29 +216,27 @@ async def handle_slave(reader, writer):
             data = await reader.readexactly(data_len)
 #            port = id_to_port[connectID]
             print(connectID)
-            #await syn_que[con_to_req[connectID]].join()
+
             print("writing to %d"%connectID)
 
             client_writer[connectID].write(data)
 
-            '''
-            await send_locks[port]
-            try:
-                send_buffs[port].append(data)
-            finally:
-                send_locks[port].release()
-            '''
         elif command[0] == com_type.disconnect.value:
             connectID,=struct.unpack('H',await reader.readexactly(2))
-            client_writer[connectID].close()
+            rid=con_to_req[connectID]
+            if syn_que[rid].empty():
+                await syn_que[rid].put(connectID)
+            else:
+                syn_que[rid].get_nowait()
+                client_writer[rid].close()
 
 
 async def handle_client(reader, writer):
-    global requestid_lock,requested,requested_lock,syn_que,client_writer,requestID_count
+    global requestid_lock,requested,requested_lock,syn_que,client_writer,requestID_count,loop
     peer_host, peer_port, = writer.get_extra_info('peername')
     sock_host, sock_port, = writer.get_extra_info('sockname')
     print("%d"%peer_port)
-    #global connectID_count,requestID_count,client_writer,requested
+
     await requestid_lock
     try:
         my_request=requestID_count
@@ -254,63 +252,44 @@ async def handle_client(reader, writer):
 
     msg=struct.pack("=HHHH",8,com_type.connect_request.value,my_request,sock_port)
     slave_writer.write(msg)
-    '''
-    buff=bytearray()
-    
-    while requested[my_request]<0:
-        print("waiting connection %d\n"%my_request)
-        #await asyncio.sleep(10)
-        data=await reader.read()
-        if len(data)==0:
-            finish=True
-            break
-        buff.extend(data)
-        '''
-    #print("connected %d"%requested[my_request])
 
-    #if requested[my_request]<0:
+
     my_id = await syn_que[my_request].get()
-    syn_que[my_request].task_done()
-    #await syn_events[my_request].wait()
+
     print("add %d-----------------" % my_request)
-    #my_id=requested[my_request]
+
     client_writer[my_id] = writer
 
-
-    if my_id == 3:
-        print("3")
     connected[my_id] = True
-    #slave_writer.write(buff)
-    #loop.create_task(handle_write_client(writer,my_id))
-    #requesting[sock_port] = True
-    #send_buffs[sock_port] = bytearray()
-    #recv_buffs[sock_port] = bytearray()
 
-    data=await reader.read(100)
-    while len(data)!=0:
-        print("reading %d..."%my_request)
-        msg=struct.pack("=HHHH"+str(len(data))+"s",7+len(data),com_type.data.value,my_id,len(data),data)
+    try:
+        while True:
+            print("reading %d..." % my_request)
+            data = await asyncio.wait_for(reader.read(100), timeout=5,loop=loop)
+            if len(data)==0:
+                break
+            msg=struct.pack("=HHHH"+str(len(data))+"s",7+len(data),com_type.data.value,my_id,len(data),data)
+            slave_writer.write(msg)
+            #data = await asyncio.wait_for(reader.read(100),5,loop=loop)
+    except asyncio.TimeoutError as e:
+        print(e)
+    finally:
+        print("done %d"%my_id)
+
+    if syn_que[my_request].empty():
+        await syn_que[my_request].put(my_id)
+        msg=struct.pack("=HHH",5,com_type.disconnect.value,my_id)
         slave_writer.write(msg)
-        data = await reader.read(100)
-    #msg=struct.pack("=HHH",5,com_type.disconnect.value,my_id)
-    #slave_writer.write(msg)
+        await syn_que[my_request].join()
+    else:
+        syn_que[my_request].get_nowait()
+        writer.close()
+    print("shut %d"%my_id)
 
-
-async def handle_write_client(writer,my_id):
-    while connected[my_id]:
-        while recv_buffs[my_id]=='':
-            pass
-        data=recv_buffs[my_id]
-        recv_buffs[my_id]=''
-        writer.write(data)
-        await writer.drain()
-
-    if len(recv_buffs[my_id])!=0:
-        data = recv_buffs[my_id]
-        writer.write(data)
-
-    writer.close()
-
+async def read_data(writer,reader,mid):
+    data = await reader.read(100)
+    msg = struct.pack("=HHHH" + str(len(data)) + "s", 7 + len(data), com_type.data.value, mid, len(data), data)
+    writer.write(msg)
 
 if __name__ == "__main__":
     for i in range(0,1000):
