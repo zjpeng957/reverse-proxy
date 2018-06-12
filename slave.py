@@ -11,35 +11,18 @@ com_type = Enum('com_type',
 
 requestID_count = 0
 connectID_count = 0
-recv_buffs = dict()
-send_buffs = dict()
 id_to_port = []
 port_to_id = dict()
 req_to_port = []
-recv_locks = dict()
-send_locks = dict()
 connected = dict()
 requesting = dict()
 
-# 协议编码格式
-fmt_chap_salt = 'HBB8s'
-fmt_chap_hash = 'HBBsBs'
-fmt_chap_result = 'HBB'
-fmt_bind_request = 'HBHH'
-fmt_bind_respone = 'HBHBH'
-fmt_connect_request = 'HHHH'
-fmt_connect_respone = 'HBHBH'
-fmt_data = 'HHHHs'
-fmt_dsconnect = 'HBH'
-prefix = 'HB'
 
+requestID_lock=asyncio.Lock()
+connectID_lock=asyncio.Lock()
 listen_writer=asyncio.StreamWriter
 server_writer={}
 syn_que=[]
-
-class listen_args:
-    tunnel_port = 0
-    users = list()
 
 
 class slave_args:
@@ -53,7 +36,6 @@ class slave_args:
     port_pair = dict()
 
 
-l_args = listen_args()
 s_args = slave_args()
 
 loop = asyncio.get_event_loop()
@@ -62,68 +44,6 @@ loop = asyncio.get_event_loop()
 def hashSalt(password, salt):
     v = hashlib.md5(bytes(password + salt, encoding='utf-8')).hexdigest()
     return v
-
-
-# 随机生成6为salt
-def getSalt():
-    salt = ''
-    charSet = 'AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVvWwXxYyZz0123456789'
-    charLen = len(charSet) - 1
-    for i in range(8):
-        salt += charSet[random.randint(0, charLen)]
-    return salt
-
-
-# 验证密码是否正确
-def validate(hashstr, password, salt):
-    return hashstr == hashSalt(password, salt)
-
-
-def find_pwd(name):
-    for user in l_args.users:
-        usr_name, usr_pw = user.split(':')
-        if usr_name == name:
-            return usr_pw
-
-    return None
-
-
-async def chap(reader, writer):
-    salt = getSalt()
-
-    msg = struct.pack('HBB' + str(len(salt)) + 's', 4 + len(salt), com_type.chap_salt.value, len(salt),
-                      bytes(salt, encoding='utf-8'))
-    writer.write(msg)
-    await writer.drain()
-    length = struct.unpack('H', await reader.readexactly(2))
-    command = struct.unpack('B', await reader.readexactly(1))
-    count = 0
-    while command[0] != com_type.chap_hash.value and count != 5:
-        await reader.readexactly(length - 3)
-        length = struct.unpack('H', await reader.readexactly(2))
-        command = struct.unpack('B', await reader.readexactly(1))
-        count = count + 1
-
-    if count == 5:
-        return False
-
-    name_len = struct.unpack('B', await reader.readexactly(1))
-    # name=struct.unpack('s',)
-    data = await reader.readexactly(name_len[0])
-    name = bytes.decode(data)
-    hash_len = struct.unpack('B', await reader.readexactly(1))
-    data = await reader.readexactly(hash_len[0])
-    hash_val = bytes.decode(data)
-
-    usr_pw = find_pwd(name)
-    if usr_pw != None and validate(hash_val, usr_pw, salt) == True:
-        msg = struct.pack(fmt_chap_result, 4, com_type.chap_result.value, 1)
-        writer.write(msg)
-        return True
-    else:
-        msg = struct.pack(fmt_chap_result, 4, com_type.chap_result.value, 1)
-        writer.write(msg)
-        return False
 
 
 def slave(opts, args):
@@ -147,11 +67,8 @@ def slave(opts, args):
 async def handle_listen():
     reader, writer = await asyncio.open_connection(s_args.tunnel_add, s_args.tunnel_port, loop=loop)
 
-    global listen_writer
+    global listen_writer,connectID_count,requestID_count
     listen_writer=writer
-
-    connectID_count = 0
-    requestID_count = 0
 
     # 开始chap认证
     while True:
@@ -186,8 +103,13 @@ async def handle_listen():
 
     # 隧道建立完成,绑定端口
     while True:
-        msg = struct.pack('=HBHH', 7, com_type.bind_request.value, 2, s_args.bind_port)
-        requestID_count = requestID_count + 1
+        msg = struct.pack('=HBHH', 7, com_type.bind_request.value, requestID_count, s_args.bind_port)
+
+        await requestID_lock
+        try:
+            requestID_count = requestID_count + 1
+        finally:
+            requestID_lock.release()
         writer.write(msg)
         #接收绑定端口回复
         length, = struct.unpack('H', await reader.readexactly(2))
@@ -212,7 +134,11 @@ async def handle_listen():
             listen_port, = struct.unpack('H', await reader.readexactly(2))
             client = asyncio.wait_for(
                     asyncio.ensure_future(handle_server(requestID,connectID_count, s_args.local_host_addr,s_args.local_host_port)), None)
-            connectID_count += 1
+            await connectID_lock
+            try:
+                connectID_count += 1
+            finally:
+                connectID_lock.release()
 
         elif command[0] == com_type.data.value:
             connectID, = struct.unpack('H', await reader.readexactly(2))
